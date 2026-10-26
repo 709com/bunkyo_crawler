@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bunkyo_crawler"
+version = "1.0.0"
+description = "行政公開情報の負荷軽減型収集とAIによる発信文・論点整理の自動生成"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31,<3",
+    "beautifulsoup4>=4.12,<5",
+    "PyYAML>=6.0,<7",
+    "anthropic>=2.0,<3",
+    "pypdf>=4.0",
+]
+
+[project.scripts]
+bunkyo-crawler = "bunkyo_crawler.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

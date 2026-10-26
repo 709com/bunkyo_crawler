@@ -1,0 +1,81 @@
+# =============================================================================
+# bunkyo_crawler 動作設定
+# -----------------------------------------------------------------------------
+# - 相対パスはリポジトリのルートを基準に解決されます。
+# - APIキー等の秘密情報はこのファイルに書かず、必ず環境変数で渡してください。
+# - 環境変数 BUNKYO_CRAWLER_SETTINGS で別の設定ファイルを指定できます。
+# =============================================================================
+
+crawler:
+  # User-Agent。{version} と {contact} は自動で置換されます。
+  # 相手先の管理者が連絡を取れるよう、contact には運用者の連絡先URL等を必ず設定してください。
+  user_agent: "BunkyoCrawler/{version} (+{contact}; low-frequency public information monitoring)"
+  contact: "https://example.invalid/contact"   # ← 運用開始前に必ず変更
+
+  # --- 負荷軽減 ---
+  request_interval_sec: 5.0        # 同一ホストへのリクエスト最小間隔（秒）
+  interval_jitter_sec: 1.0         # 間隔に加えるランダム揺らぎ（0〜この値、秒）
+  timeout_sec: 30                  # 1リクエストのタイムアウト（秒）
+  max_content_bytes: 10485760      # 取得する本文の上限（10MB）。超過分は打ち切り
+
+  # --- リトライ（指数関数的バックオフ） ---
+  max_retries: 4                   # 初回を除く最大リトライ回数
+  backoff_base_sec: 2.0            # 待機 = base * 2^試行回数 + 揺らぎ
+  backoff_max_sec: 120.0           # 1回あたりの待機上限
+  retry_after_max_sec: 600.0       # Retry-After がこれを超える場合はリトライせず中止
+  retry_status_codes: [429, 500, 502, 503, 504]
+
+  # --- robots.txt ---
+  respect_robots_txt: true         # false にはしないでください
+  robots_cache_ttl_sec: 86400      # robots.txt の再取得間隔（秒）
+
+  # --- 取得対象とするContent-Type ---
+  allowed_content_types:
+    - text/html
+    - application/xhtml+xml
+    - text/plain
+    - application/pdf              # PDF の本文抽出には pypdf が必要
+
+# -----------------------------------------------------------------------------
+# 収集対象。enabled: false のものは実行されません。
+# follow_links: true の場合、link_patterns（正規表現）に一致する同一ドメインの
+# リンクを max_depth / max_pages の範囲で辿ります。
+# -----------------------------------------------------------------------------
+targets:
+  - name: bunkyo_city_top
+    description: "文京区公式サイト トップページ（サンプル）"
+    url: "https://www.city.bunkyo.lg.jp/"
+    enabled: true
+    follow_links: false
+    max_depth: 0
+    max_pages: 1
+    link_patterns: []
+
+  - name: bunkyo_city_news_example
+    description: "新着情報等の一覧ページを辿る例（URL・パターンは実際の構成に合わせて調整）"
+    url: "https://www.city.bunkyo.lg.jp/"
+    enabled: false
+    follow_links: true
+    max_depth: 1
+    max_pages: 20
+    link_patterns:
+      - "^https://www\\.city\\.bunkyo\\.lg\\.jp/.+\\.html$"
+
+database:
+  path: "data/bunkyo_crawler.db"
+
+ai:
+  provider: anthropic
+  model: "claude-opus-5-5"
+  effort: "medium"                 # low / medium / high / xhigh / max
+  api_key_env: "ANTHROPIC_API_KEY" # APIキーを読み込む環境変数名
+  prompts_file: "config/prompts.yaml"
+  timeout_sec: 600
+  max_retries: 3                   # SDK側のリトライ回数（429/5xx/接続エラー）
+  use_refusal_fallback: true       # 安全分類器による拒否時、サーバー側で代替モデルに切替
+  max_input_chars: 150000          # AIに渡す本文の上限。超過時は生成をスキップしてログに記録
+  min_input_chars: 50              # これ未満の本文は生成対象外（空ページ等）
+
+logging:
+  level: "INFO"
+  file: "logs/bunkyo_crawler.log"

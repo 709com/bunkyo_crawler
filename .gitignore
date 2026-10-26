@@ -1,0 +1,26 @@
+# 秘密情報
+.env
+.env.*
+!.env.example
+
+# データ・ログ（取得データやAI生成物はリポジトリに含めない）
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep
+exports/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+
+# OS / エディタ
+.DS_Store
+.idea/
+.vscode/
