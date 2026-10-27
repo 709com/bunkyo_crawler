@@ -57,16 +57,39 @@ class CrawlerConfig:
     )
 
 
+TARGET_TYPES = ("page", "feed", "index")
+
+
 @dataclass
 class TargetConfig:
+    """収集対象。
+
+    type:
+        page  : url のページそのものを1件の文書として取得する
+        feed  : url のRSS/Atomを読み、載っている記事を取得する
+        index : url の一覧ページを読み、本文中のリンク先を取得する
+    一覧ページ（feed / index の url と list_patterns に一致するページ）は文書として保存せず、
+    リンクの抽出だけに使う。リンク先（記事）は、まだ取得していないものだけを取りに行く。
+    """
+
     name: str
     url: str
+    type: str = "page"
     description: str = ""
     enabled: bool = True
-    follow_links: bool = False
-    max_depth: int = 0
-    max_pages: int = 1
-    link_patterns: list[str] = field(default_factory=list)
+    output_profile: str = "full"          # prompts.yaml の profiles のキー
+    interval_days: float = 0              # 前回実行からこの日数が経つまで実行しない（0 = 毎回）
+    max_depth: int = 0                    # 一覧ページをたどる深さ（list_patterns に一致するもの）
+    max_pages: int = 50                   # 1回の実行で行うリクエスト数の上限
+    list_patterns: list[str] = field(default_factory=list)        # たどる一覧ページ（正規表現）
+    item_patterns: list[str] = field(default_factory=list)        # 取得する記事（空なら全リンク）
+    exclude_patterns: list[str] = field(default_factory=list)     # 取得しないリンク
+    attachment_patterns: list[str] = field(default_factory=list)  # 記事ページ内で併せて取得する添付（PDF等）
+    allowed_hosts: list[str] = field(default_factory=list)        # 空なら url と同じホストのみ
+
+    def __post_init__(self) -> None:
+        if self.type not in TARGET_TYPES:
+            raise ConfigError(f"targets[{self.name}].type は {TARGET_TYPES} のいずれかにしてください。")
 
 
 @dataclass
@@ -80,6 +103,7 @@ class AIConfig:
     use_refusal_fallback: bool = True
     max_input_chars: int = 150_000
     min_input_chars: int = 50
+    max_documents_per_run: int = 30       # run コマンドで1回にAI生成する文書数の上限（費用の歯止め）
     provider: str = "anthropic"
 
 
@@ -113,6 +137,9 @@ def load_settings(path: str | Path | None = None) -> Settings:
         raise ConfigError("request_interval_sec は 1.0 秒以上にしてください（相手先サーバーの負荷軽減）。")
 
     targets = [TargetConfig(**t) for t in (raw.get("targets") or [])]
+    names = [t.name for t in targets]
+    if len(names) != len(set(names)):
+        raise ConfigError("targets の name が重複しています。")
 
     a = dict(raw.get("ai") or {})
     if "prompts_file" in a:
@@ -142,6 +169,10 @@ def load_prompts(path: str | Path) -> dict[str, Any]:
     keys = [o.get("key") for o in data["outputs"]]
     if len(keys) != len(set(keys)) or not all(keys):
         raise ConfigError("outputs の key が空または重複しています。")
+    for name, prof in (data.get("profiles") or {}).items():
+        unknown = set((prof or {}).get("outputs") or []) - set(keys)
+        if unknown:
+            raise ConfigError(f"profiles[{name}] に未定義の成果物があります: {', '.join(sorted(unknown))}")
     for o in data["outputs"]:
         if not o.get("instructions"):
             raise ConfigError(f"outputs[{o['key']}] に instructions がありません。")

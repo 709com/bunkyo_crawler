@@ -34,7 +34,7 @@ def setup_logging(settings: Settings, verbose: bool = False) -> None:
 
 def _select_targets(settings: Settings, name: str | None, url: str | None) -> list[TargetConfig]:
     if url:
-        return [TargetConfig(name="adhoc", url=url)]
+        return [TargetConfig(name="adhoc", url=url, type="page")]
     if name:
         found = [t for t in settings.targets if t.name == name]
         if not found:
@@ -52,7 +52,9 @@ def cmd_crawl(settings: Settings, db: Database, args: argparse.Namespace) -> lis
     from .crawler import Crawler
 
     crawler = Crawler(settings.crawler, db)
-    stats = crawler.crawl(_select_targets(settings, args.target, args.url))
+    # 対象を個別に指定した場合は、実行間隔（週1回など）に関係なく実行する
+    ignore_interval = bool(args.ignore_interval or args.target or args.url)
+    stats = crawler.crawl(_select_targets(settings, args.target, args.url), ignore_interval=ignore_interval)
     print(stats.summary())
     if stats.new_document_ids:
         print("新規保存した document_id:", ", ".join(map(str, stats.new_document_ids)))
@@ -90,8 +92,7 @@ def cmd_generate(settings: Settings, db: Database, args: argparse.Namespace) -> 
         from .ai_pipeline import AIGenerator
 
         gen = AIGenerator(settings.ai)  # クライアントは遅延生成のため、ここではAPIを呼ばない
-        keys = args.types or gen.output_keys()
-        ids = db.documents_missing_generations(keys, gen.version)
+        ids = gen.pending_documents(db, args.types)
     if not ids:
         print("生成対象の文書はありません。")
         return 0
@@ -102,6 +103,11 @@ def cmd_run(settings: Settings, db: Database, args: argparse.Namespace) -> int:
     new_ids = cmd_crawl(settings, db, args)
     if args.no_ai or not new_ids:
         return 0
+    limit = settings.ai.max_documents_per_run
+    if len(new_ids) > limit:
+        print(f"新しい文書が {len(new_ids)} 件あります。費用の歯止めのため、今回AI生成するのは {limit} 件までです。"
+              "残りは次回、または `generate` で生成されます。")
+        new_ids = new_ids[:limit]
     return _generate(settings, db, new_ids, None, False)
 
 
@@ -110,10 +116,10 @@ def cmd_list(settings: Settings, db: Database, args: argparse.Namespace) -> int:
     if not rows:
         print("保存済みの文書はありません。")
         return 0
-    print("| id | 取得日時(UTC) | 生成済 | 文字数 | タイトル | URL |")
-    print("|---|---|---|---|---|---|")
+    print("| id | 取得日時(UTC) | 種類 | 生成済 | 文字数 | タイトル | URL |")
+    print("|---|---|---|---|---|---|---|")
     for r in rows:
-        print(f"| {r['id']} | {r['fetched_at']} | {r['generated']} | {r['text_chars'] or 0} | "
+        print(f"| {r['id']} | {r['fetched_at']} | {r['output_profile']} | {r['generated']} | {r['text_chars'] or 0} | "
               f"{(r['title'] or '').replace('|', '／')} | {r['url']} |")
     return 0
 
@@ -174,6 +180,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp = sub.add_parser(name, help=help_)
         sp.add_argument("--target", help="settings.yaml の targets[].name を指定")
         sp.add_argument("--url", help="単発でURLを指定して取得")
+        sp.add_argument("--ignore-interval", action="store_true",
+                        help="実行間隔（週1回など）を無視して、有効な対象をすべて実行")
         if name == "run":
             sp.add_argument("--no-ai", action="store_true", help="AI生成を行わない")
         sp.set_defaults(func=func)

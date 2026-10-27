@@ -38,15 +38,6 @@ def extract_html(content: bytes, base_url: str) -> Extracted:
     soup = BeautifulSoup(content, "html.parser")
     title = soup.title.get_text(strip=True) if soup.title else None
 
-    links: list[str] = []
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        if href.startswith(("mailto:", "tel:", "javascript:")):
-            continue
-        absolute, _ = urldefrag(urljoin(base_url, href))
-        if absolute.startswith(("http://", "https://")) and absolute not in links:
-            links.append(absolute)
-
     for tag in soup(_NOISE_TAGS):
         tag.decompose()
     root = None
@@ -56,6 +47,16 @@ def extract_html(content: bytes, base_url: str) -> Extracted:
             break
         root = None
     root = root or soup.body or soup
+
+    # リンクは本文領域からだけ拾う（サイト共通のメニュー等を記事と取り違えないため）
+    links: list[str] = []
+    for a in root.find_all("a", href=True):
+        href = a["href"].strip()
+        if href.startswith(("mailto:", "tel:", "javascript:")):
+            continue
+        absolute, _ = urldefrag(urljoin(base_url, href))
+        if absolute.startswith(("http://", "https://")) and absolute not in links:
+            links.append(absolute)
     return Extracted(title=title, text=normalize_text(root.get_text("\n")), links=links)
 
 

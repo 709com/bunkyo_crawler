@@ -37,29 +37,121 @@ crawler:
     - application/pdf              # PDF の本文抽出には pypdf が必要
 
 # -----------------------------------------------------------------------------
-# 収集対象。enabled: false のものは実行されません。
-# follow_links: true の場合、link_patterns（正規表現）に一致する同一ドメインの
-# リンクを max_depth / max_pages の範囲で辿ります。
+# 収集対象
+#
+# type（種類）
+#   feed  : RSS（更新情報の配信ファイル）を読み、載っている記事を取得
+#   index : 一覧ページを読み、本文中のリンク先（記事・PDF）を取得
+#   page  : 指定したページそのものを取得
+#
+# 主な項目
+#   output_profile    : AIで作る成果物の組（prompts.yaml の profiles）
+#                       full = 6種類 / council = 要約と論点整理 / none = 保存のみ
+#   interval_days     : 前回から何日あけて実行するか（0 = 毎回、7 = 週1回）
+#   max_pages         : 1回の実行で区のサイトにアクセスする回数の上限
+#   max_depth         : 一覧ページから、さらに下の一覧ページを何段たどるか
+#   list_patterns     : 「一覧ページ」とみなすアドレス（正規表現）。保存せずリンク集めにだけ使う
+#   item_patterns     : 取得する記事のアドレス（空なら一覧に載っている全リンク）
+#   exclude_patterns  : 取得しないアドレス
+#   attachment_patterns : 記事ページの中で、併せて取得する添付ファイル（PDF等）
+#
+# 一度取得した記事は、次回以降は取りに行きません（RSSの日付が新しくなった場合を除く）。
+# 年のフォルダ（r08 = 令和8年）は「r08以降」に一致する書き方にしてあるため、
+# 年が替わっても設定の書き換えは不要です。
 # -----------------------------------------------------------------------------
 targets:
-  - name: bunkyo_city_top
-    description: "文京区公式サイト トップページ（サンプル）"
-    url: "https://www.city.bunkyo.lg.jp/"
-    enabled: true
-    follow_links: false
-    max_depth: 0
-    max_pages: 1
-    link_patterns: []
+  # ===== 毎日確認するもの =====================================================
+  - name: bunkyo_shinchaku_rss
+    description: "文京区 新着情報（RSS）"
+    type: feed
+    url: "https://www.city.bunkyo.lg.jp/shinchaku/shinchaku.xml"
+    output_profile: full
+    interval_days: 0
+    max_pages: 60
 
-  - name: bunkyo_city_news_example
-    description: "新着情報等の一覧ページを辿る例（URL・パターンは実際の構成に合わせて調整）"
-    url: "https://www.city.bunkyo.lg.jp/"
-    enabled: false
-    follow_links: true
+  - name: bunkyo_chuumoku_rss
+    description: "文京区 注目情報（RSS）"
+    type: feed
+    url: "https://www.city.bunkyo.lg.jp/chuumoku/chuumoku.xml"
+    output_profile: full
+    interval_days: 0
+    max_pages: 30
+
+  - name: kugikai_shinchaku
+    description: "文京区議会 新着情報（会議録速報版・委員会資料などの掲載を想定）"
+    type: index
+    url: "https://www.city.bunkyo.lg.jp/kugikai/shinchaku/index.html"
+    output_profile: council
+    interval_days: 0
+    max_depth: 2
+    max_pages: 80
+    list_patterns:
+      - "/kugikai/kekka/gian/[a-z_]+/index\\.html$"
+      - "/kugikai/kekka/gian/[a-z_]+/r(0[8-9]|[1-9][0-9])/index\\.html$"
+    exclude_patterns:
+      - "/index\\.html$"           # 上記以外の一覧ページ（過去の年など）はたどらない
+    attachment_patterns:
+      - "\\.pdf$"
+
+  # ===== 週1回確認するもの（区議会の新着情報・RSSで拾えなかった分の念のための確認） =====
+  - name: houdou
+    description: "報道発表資料（令和8年以降）"
+    type: index
+    # ※ 一覧の入口ページのアドレスは未確認です。エラーになる場合は区のサイトで確認して修正してください。
+    url: "https://www.city.bunkyo.lg.jp/kuseijouhou/kouhou/houdou/index.html"
+    output_profile: full
+    interval_days: 7
+    max_depth: 2
+    max_pages: 150
+    list_patterns:
+      - "/kuseijouhou/kouhou/houdou/r(0[8-9]|[1-9][0-9])/index\\.html$"
+      - "/kuseijouhou/kouhou/houdou/r(0[8-9]|[1-9][0-9])/[0-9]{1,2}/index\\.html$"
+    exclude_patterns:
+      - "/index\\.html$"
+
+  - name: kugikai_iinkai_shiryo
+    description: "区議会 委員会資料（各委員会・令和8年以降）"
+    type: index
+    url: "https://www.city.bunkyo.lg.jp/kugikai/kekka/index.html"
+    output_profile: council
+    interval_days: 7
+    max_depth: 3
+    max_pages: 200
+    list_patterns:
+      - "/kugikai/kekka/gian/index\\.html$"
+      - "/kugikai/kekka/gian/[a-z_]+/index\\.html$"
+      - "/kugikai/kekka/gian/[a-z_]+/r(0[8-9]|[1-9][0-9])/index\\.html$"
+    item_patterns:
+      - "/kugikai/p[0-9]+\\.html$"   # 各委員会・各定例議会の資料ページ
+    attachment_patterns:
+      - "\\.pdf$"
+
+  - name: kyouikuiinkai
+    description: "教育委員会 定例会等資料（令和8年以降）"
+    type: index
+    # ※ 一覧の入口ページのアドレスは未確認です。エラーになる場合は区のサイトで確認して修正してください。
+    url: "https://www.city.bunkyo.lg.jp/kosodatekyouiku/kyouiku/kyouikuiinkai/teireikai/index.html"
+    output_profile: council
+    interval_days: 7
     max_depth: 1
-    max_pages: 20
-    link_patterns:
-      - "^https://www\\.city\\.bunkyo\\.lg\\.jp/.+\\.html$"
+    max_pages: 100
+    list_patterns:
+      - "/kyouikuiinkai/teireikai/r(0[8-9]|[1-9][0-9])/index\\.html$"
+    exclude_patterns:
+      - "/index\\.html$"
+    attachment_patterns:
+      - "\\.pdf$"
+
+  # 会議録（速報版）の一覧ページのアドレスが分かったら、次のように追加してください。
+  # - name: kaigiroku_sokuhou
+  #   description: "区議会 会議録（速報版）"
+  #   type: index
+  #   url: "（一覧ページのアドレス）"
+  #   output_profile: council
+  #   interval_days: 7
+  #   max_pages: 100
+  #   attachment_patterns:
+  #     - "\\.pdf$"
 
 database:
   path: "data/bunkyo_crawler.db"
@@ -75,6 +167,7 @@ ai:
   use_refusal_fallback: true       # 安全分類器による拒否時、サーバー側で代替モデルに切替
   max_input_chars: 150000          # AIに渡す本文の上限。超過時は生成をスキップしてログに記録
   min_input_chars: 50              # これ未満の本文は生成対象外（空ページ等）
+  max_documents_per_run: 30        # run で1回にAI生成する文書数の上限（残りは次回・generate で）
 
 logging:
   level: "INFO"

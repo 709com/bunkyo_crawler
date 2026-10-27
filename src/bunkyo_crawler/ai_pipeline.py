@@ -112,6 +112,24 @@ class AIGenerator:
     def output_keys(self) -> list[str]:
         return [o["key"] for o in self.outputs]
 
+    def profile(self, name: str | None) -> dict[str, Any]:
+        """成果物の組（profiles）を返す。未定義の名前なら全成果物を対象とする。"""
+        profiles = self.prompts.get("profiles") or {}
+        prof = profiles.get(name or "full")
+        if prof is None:
+            logger.warning("プロンプト設定に profiles.%s がありません。全成果物を対象にします。", name)
+            return {"outputs": self.output_keys(), "extra_system": ""}
+        return {"outputs": list(prof.get("outputs") or []), "extra_system": prof.get("extra_system") or ""}
+
+    def pending_documents(self, db: Database, output_keys: list[str] | None = None) -> list[int]:
+        """このプロンプト版で、必要な成果物がまだ揃っていない文書IDを返す。"""
+        ids = []
+        for row in db.document_profiles():
+            required = set(output_keys or self.profile(row["output_profile"])["outputs"])
+            if required and not required <= db.successful_output_types(row["id"], self.version):
+                ids.append(row["id"])
+        return ids
+
     def _render(self, template: str, **values: Any) -> str:
         return template.format(**{**self._fmt, **values})
 
@@ -139,11 +157,14 @@ class AIGenerator:
         return "".join(getattr(b, "text", "") for b in message.content if getattr(b, "type", "") == "text").strip()
 
     # ------------------------------------------------------------------ 生成
-    def generate_one(self, source_block: dict[str, Any], output: dict[str, Any]) -> GenerationResult:
+    def generate_one(self, source_block: dict[str, Any], output: dict[str, Any],
+                     extra_system: str = "") -> GenerationResult:
         key, label = output["key"], output.get("label", output["key"])
         constraints = output.get("constraints") or {}
         max_attempts = int(constraints.get("max_attempts", 1))
         system = self._render(self.prompts["system_prompt"])
+        if extra_system:
+            system += "\n" + self._render(extra_system)
         instructions = self._render(output["instructions"])
         result = GenerationResult(output_type=key, label=label, status="error")
 
@@ -197,7 +218,10 @@ class AIGenerator:
         doc = db.get_document(document_id)
         if doc is None:
             raise ValueError(f"document_id={document_id} が見つかりません。")
-        targets = [o for o in self.outputs if not output_keys or o["key"] in output_keys]
+        prof = self.profile(doc["output_profile"])
+        # --types の指定があればそれを優先し、なければ文書の種類（profile）に応じた成果物を作る
+        wanted = output_keys or prof["outputs"]
+        targets = [o for o in self.outputs if o["key"] in wanted]
         text = doc["extracted_text"] or ""
         results: list[GenerationResult] = []
 
@@ -231,7 +255,7 @@ class AIGenerator:
                 continue
             logger.info("document_id=%d [%s] を生成中…", document_id, output["key"])
             try:
-                r = self.generate_one(source_block, output)
+                r = self.generate_one(source_block, output, prof["extra_system"])
             except AIConfigError:
                 raise
             except Exception as e:  # API障害等は記録して次の成果物へ

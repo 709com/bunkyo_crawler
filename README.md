@@ -30,6 +30,33 @@
 | `blog_article` | ⑤ 公式ブログ用記事 | Markdown、1500〜2500字、所感欄は【議員コメント：要記入】 |
 | `council_questions` | ⑥ 議会・委員会向け質疑ポイント（論点整理） | 論点ごとに質問案・確認データ・想定答弁（要検証）・再質問 |
 
+文書の種類によって、作る成果物の組を変えています（`config/prompts.yaml` の `profiles`）。
+
+| 組（profile） | 対象 | 作る成果物 |
+|---|---|---|
+| `full` | 区のお知らせ・報道発表 | 6種類すべて |
+| `council` | 会議録・委員会資料・教育委員会資料 | ①要約と⑥論点整理のみ。議員・理事者の氏名は発言者として残す。速報版は【速報版に基づく】と明記 |
+| `none` | 保存だけしたいもの | AI生成なし |
+
+---
+
+## 1-2. 収集対象（初期設定）
+
+| 頻度 | 名前 | 内容 | 種類 | 成果物 |
+|---|---|---|---|---|
+| 毎日 | `bunkyo_shinchaku_rss` | 文京区 新着情報（RSS） | feed | full |
+| 毎日 | `bunkyo_chuumoku_rss` | 文京区 注目情報（RSS） | feed | full |
+| 毎日 | `kugikai_shinchaku` | 文京区議会 新着情報 | index | council |
+| 週1回 | `houdou` | 報道発表資料（令和8年以降） | index | full |
+| 週1回 | `kugikai_iinkai_shiryo` | 区議会 委員会資料（令和8年以降） | index | council |
+| 週1回 | `kyouikuiinkai` | 教育委員会 定例会等資料（令和8年以降） | index | council |
+
+- 毎日の3つで新しい情報を拾い、週1回の3つは「拾い漏れがないかの念のための確認」です。
+- 一度取得した記事は、次回以降は取りに行きません（RSSの日付が新しくなった場合を除く）。
+- アドレスに含まれる年（`r08` = 令和8年）は「令和8年以降」に一致する書き方にしてあり、年が替わっても設定の変更は不要です。
+- **未確認の点**：`houdou` と `kyouikuiinkai` の入口ページのアドレス、`kugikai_iinkai_shiryo` の入口ページから各委員会のページへリンクがあるかは、まだ実際のサイトで確認していません。初回実行時にエラーや取得0件になった場合は、`settings.yaml` のアドレスを修正してください。
+- 会議録（速報版）の一覧ページが分かれば、`settings.yaml` の末尾にある例のとおり追加できます。
+
 ---
 
 ## 2. ディレクトリ構成
@@ -51,7 +78,8 @@ bunkyo_crawler/
 │   ├── config.py              # YAML設定の読み込みと検証
 │   ├── fetcher.py             # 負荷軽減型HTTP取得（待機・リトライ・バックオフ・サイズ上限）
 │   ├── robots.py              # robots.txt の取得・解釈・遵守（Crawl-delay対応）
-│   ├── crawler.py             # 差分取得（条件付きGET＋ハッシュ比較）とDB保存
+│   ├── feeds.py               # RSS 1.0 / 2.0 / Atom の読み取り
+│   ├── crawler.py             # RSS・一覧ページ・単独ページの収集、差分取得とDB保存
 │   ├── extractor.py           # HTML / テキスト / PDF からの本文抽出
 │   ├── ai_pipeline.py         # AIによる6種類のテキスト生成と制約チェック
 │   └── database.py            # SQLiteスキーマと保存処理
@@ -95,7 +123,7 @@ set -a; source .env; set +a        # 現在のシェルに読み込む
 運用開始前に、最低限以下を確認・変更してください。
 
 1. **`crawler.contact`** — User-Agent に記載する連絡先（運用者の連絡先ページURL等）。相手先の管理者が問い合わせできるようにするためのものです。
-2. **`targets`** — 収集対象のURL。サンプルとして文京区公式サイトのトップページが入っています。実際に監視したい一覧ページ等に合わせて変更してください。
+2. **`targets`** — 収集対象。初期設定は「1-2. 収集対象」のとおりです。未確認のアドレスがあるため、初回実行の結果を見て必要なら修正してください。
 3. **`ai.model` / `ai.effort`** — 使用するモデルと推論の深さ（既定: `claude-opus-5-5` / `medium`）。
 
 ### 3.5 データベースの初期化
@@ -114,14 +142,15 @@ python -m bunkyo_crawler init-db
 
 | コマンド | 内容 |
 |---|---|
-| `crawl` | 有効な対象をすべて収集（更新分のみ保存） |
-| `crawl --target NAME` | `settings.yaml` の特定の対象だけを収集 |
+| `crawl` | 有効な対象を収集（週1回の対象は、前回から7日経っているときだけ） |
+| `crawl --ignore-interval` | 週1回の対象も含め、すべてを今すぐ収集 |
+| `crawl --target NAME` | `settings.yaml` の特定の対象だけを今すぐ収集 |
 | `crawl --url URL` | 単発でURLを指定して収集 |
-| `generate` | 6種類が揃っていない文書すべてについてAI生成 |
+| `generate` | 成果物が揃っていない文書すべてについてAI生成（文書の種類に応じて6種類または2種類） |
 | `generate --document-id N` | 特定の文書についてAI生成 |
 | `generate --document-id N --types x_post line_message` | 種類を絞って生成 |
 | `generate --document-id N --force` | 生成済みでも作り直す |
-| `run` | 収集 → 新たに保存された文書だけAI生成（定期実行向け） |
+| `run` | 収集 → 新たに保存された文書だけAI生成（定期実行向け）。1回のAI生成は `ai.max_documents_per_run`（既定30件）まで |
 | `run --no-ai` | 収集のみ（`crawl` と同じ） |
 | `list` | 保存済み文書の一覧（Markdown表） |
 | `show --document-id N` | 文書と生成物をMarkdownで表示 |
@@ -140,8 +169,16 @@ python -m bunkyo_crawler show --document-id 3 --output exports/doc3.md
 python -m bunkyo_crawler review --generation-id 15 --status approved
 ```
 
+### 初回実行について
+
+初回は令和8年分の報道発表・委員会資料などをまとめて取得するため、件数が多くなります。
+1回のアクセス数は対象ごとの `max_pages` で、AI生成は `max_documents_per_run` で上限を設けており、
+残りは次回以降に少しずつ処理されます。費用を確認しながら進めたい場合は、初回は
+`run --no-ai` で収集だけ行い、`list` で件数を確認してから `generate` を実行してください。
+
 ### 定期実行の例（cron）
 
+`run` を1日1回実行すれば、毎日の対象と週1回の対象が自動で振り分けられます。
 アクセス頻度は相手先への配慮から**1日1〜数回程度**を推奨します。
 
 ```cron
@@ -161,7 +198,9 @@ python -m bunkyo_crawler review --generation-id 15 --status approved
 | robots.txt 取得不能時 | 401/403 → 全体禁止、その他4xx → 存在しないものとして許可、5xx・通信失敗 → **そのホストへのアクセスを見送り**エラーとして記録（10分後に再確認） |
 | User-Agent | `BunkyoCrawler/<版> (+<連絡先>; ...)` を全リクエストに付与。連絡先未設定は設定エラー |
 | 指数関数的バックオフ | 429・5xx・接続エラー・タイムアウト時に `backoff_base_sec × 2^n`＋揺らぎ（上限 `backoff_max_sec`）待って再試行。`Retry-After` ヘッダーがあればそれ以上待つ。上限を超える `Retry-After` やリトライ回数超過で中止 |
-| その他 | 取得サイズ上限（既定10MB）、対象Content-Typeの限定、リンク巡回は同一ドメイン・正規表現パターン・深さ・ページ数で制限 |
+| RSS・一覧ページ | RSS（更新情報の配信ファイル）や一覧ページは文書として保存せず、リンク集めにだけ使う。304のときは前回保存したリンク一覧を使う。記事は**未取得のものだけ**取りに行く |
+| 実行間隔 | 対象ごとの `interval_days` で、週1回などの頻度を制御 |
+| その他 | 取得サイズ上限（既定10MB）、対象Content-Typeの限定、1回のアクセス数上限（`max_pages`）、同一ドメインのみ、本文領域内のリンクのみ（サイト共通メニューは無視） |
 
 `respect_robots_txt` を `false` にすると設定エラーになり、無効化できない設計です。
 
@@ -191,13 +230,14 @@ python -m bunkyo_crawler review --generation-id 15 --status approved
 pages ─┬─< documents ─┬─< generations
        │              │
        │  (URLごとの状態)   (取得した版ごとの生データ)   (版ごと・種類ごとのAI生成テキスト)
-fetch_log（全アクセスの記録：updated / not_modified / unchanged / disallowed / error / skipped）
+fetch_log（全アクセスの記録：updated / listing / not_modified / unchanged / disallowed / error / skipped）
+target_runs（収集対象ごとの最終実行日時。週1回などの判定に使う）
 ```
 
 | テーブル | 主な列 |
 |---|---|
-| `pages` | `url`, `etag`, `last_modified`, `content_hash`, `last_checked_at`, `last_changed_at` |
-| `documents` | `page_id`, `url`, `fetched_at`, `content_type`, `raw_content`（生データBLOB）, `title`, `extracted_text` |
+| `pages` | `url`, `etag`, `last_modified`, `content_hash`, `last_checked_at`, `last_changed_at`, `links_json`（一覧ページのリンク） |
+| `documents` | `page_id`, `url`, `fetched_at`, `content_type`, `raw_content`（生データBLOB）, `title`, `extracted_text`, `output_profile` |
 | `generations` | `document_id`, `output_type`, `prompt_version`, `model`, `status`, `review_status`, `content`, `error`, トークン使用量 |
 | `fetch_log` | `url`, `requested_at`, `result`, `http_status`, `attempts`, `note` |
 
@@ -214,7 +254,7 @@ sqlite3 data/bunkyo_crawler.db \
 
 ## 8. テスト
 
-ネットワークやAPIを使わずに、robots.txt遵守・待機・差分取得・バックオフ・6種類の生成と紐付け・文字数チェックを検証します。
+ネットワークやAPIを使わずに、robots.txt遵守・待機・差分取得・バックオフ・RSS（RSS 1.0/2.0/Atom、Shift_JIS含む）・一覧ページの巡回・週1回の間隔制御・成果物の組・文字数チェックを検証します。
 
 ```bash
 python -m unittest discover -s tests -v
